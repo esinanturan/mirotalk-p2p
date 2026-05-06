@@ -624,33 +624,7 @@ let peerConnections = {}; // keep track of our peer connections, indexed by peer
 let chatDataChannels = {}; // keep track of our peer chat data channels
 let fileDataChannels = {}; // keep track of our peer file sharing data channels
 let allPeers = {}; // keep track of all peers in the room, indexed by peer_id == socket.io id
-
-
-let pendingIceCandidates = {}; 
-
-function queueIceCandidate(peer_id, ice_candidate) {
-    if (!peer_id || !ice_candidate) return;
-    if (!pendingIceCandidates[peer_id]) pendingIceCandidates[peer_id] = [];
-    pendingIceCandidates[peer_id].push(ice_candidate);
-}
-
-async function flushIceCandidates(peer_id) {
-    const pc = peerConnections[peer_id];
-    const queued = pendingIceCandidates[peer_id];
-
-    if (!pc || !queued || queued.length === 0) return;
-    if (!pc.remoteDescription || !pc.remoteDescription.type) return;
-
-    delete pendingIceCandidates[peer_id];
-
-    for (const ice of queued) {
-        try {
-            await pc.addIceCandidate(new RTCIceCandidate(ice));
-        } catch (err) {
-            console.error('[Error] addIceCandidate (queued)', err);
-        }
-    }
-}
+let pendingIceCandidates = {}; // keep track of pending ICE candidates before the peer connection is ready, indexed by peer_id == socket.io id
 
 let lastStats = null;
 
@@ -2742,9 +2716,6 @@ async function handleAddPeer(config) {
     const peerConnection = new RTCPeerConnection({ iceServers: iceServers });
     peerConnections[peer_id] = peerConnection;
 
-    // If ICE arrived before we processed addPeer, keep it and flush when ready.
-    flushIceCandidates(peer_id).catch((err) => console.error('[Error] flushIceCandidates', err));
-
     allPeers = peers;
     // Ensure extras object exists for every peer to avoid undefined checks later
     try {
@@ -3221,6 +3192,41 @@ function handleIceCandidate(config) {
     pc.addIceCandidate(new RTCIceCandidate(ice_candidate)).catch((err) => {
         console.error('[Error] addIceCandidate', err);
     });
+}
+
+/**
+ * If addIceCandidate is called before setRemoteDescription, it can fail and the candidate will be lost. To prevent this, we queue candidates until setRemoteDescription is called.
+ * @param {string} peer_id socket.id
+ * @param {object} ice_candidate RTCIceCandidateInit
+ * @returns {void}
+ */
+function queueIceCandidate(peer_id, ice_candidate) {
+    if (!peer_id || !ice_candidate) return;
+    if (!pendingIceCandidates[peer_id]) pendingIceCandidates[peer_id] = [];
+    pendingIceCandidates[peer_id].push(ice_candidate);
+}
+
+/**
+ * When setRemoteDescription is called, we can flush any queued ICE candidates for that peer.
+ * @param {string} peer_id socket.id
+ * @returns {Promise<void>}
+ */
+async function flushIceCandidates(peer_id) {
+    const pc = peerConnections[peer_id];
+    const queued = pendingIceCandidates[peer_id];
+
+    if (!pc || !queued || queued.length === 0) return;
+    if (!pc.remoteDescription || !pc.remoteDescription.type) return;
+
+    delete pendingIceCandidates[peer_id];
+
+    for (const ice of queued) {
+        try {
+            await pc.addIceCandidate(new RTCIceCandidate(ice));
+        } catch (err) {
+            console.error('[Error] addIceCandidate (queued)', err);
+        }
+    }
 }
 
 /**
