@@ -15,7 +15,7 @@
  * @license For commercial use or closed source, contact us at license.mirotalk@gmail.com or purchase directly from CodeCanyon
  * @license CodeCanyon: https://codecanyon.net/item/mirotalk-p2p-webrtc-realtime-video-conferences/38376661
  * @author  Miroslav Pejic - miroslav.pejic.85@gmail.com
- * @version 1.8.33
+ * @version 1.8.34
  *
  */
 
@@ -2893,13 +2893,16 @@ async function handleOnTrack(peer_id, peers) {
         // Helper to load or attach stream
         const handleStream = (elementId, streamType) => {
             const element = getId(`${peer_id}___${elementId}`);
-            const hasStream = element?.srcObject && (elementId === 'audio' || hasVideoTrack(element.srcObject));
 
-            if (!hasStream) {
+            if (!element) {
+                // Tile doesn't exist yet — create everything
                 loadRemoteMediaStream(inbound, allPeers || peers, peer_id, streamType);
             } else {
+                // Tile already exists (e.g. peer joined with camera off) — just attach the new stream
                 attachMediaStream(element, inbound);
                 elemDisplay(element, true, 'block');
+                // Safari requires an explicit play() after srcObject is reassigned
+                element.play().catch(() => {});
             }
         };
 
@@ -2908,12 +2911,11 @@ async function handleOnTrack(peer_id, peers) {
 
             if (audioElement) {
                 attachMediaStream(audioElement, inbound);
-                if (!audioElement.srcObject) {
-                    audioElement.play().catch((err) => {
-                        console.warn('[AUDIO] Autoplay not allowed by device, setting up fallback:', err);
-                        handleAudioFallback(audioElement, peer_name);
-                    });
-                }
+                // Always call play() — srcObject was just assigned so the old check (!srcObject) was always false
+                audioElement.play().catch((err) => {
+                    console.warn('[AUDIO] Autoplay not allowed by device, setting up fallback:', err);
+                    handleAudioFallback(audioElement, peer_name);
+                });
             } else {
                 loadRemoteMediaStream(inbound, allPeers || peers, peer_id, 'audio');
             }
@@ -4779,6 +4781,7 @@ async function loadRemoteMediaStream(stream, peers, peer_id, kind) {
             remoteMedia.setAttribute('id', peer_id + '___video');
             remoteMedia.setAttribute('playsinline', true);
             remoteMedia.autoplay = true;
+            remoteMedia.muted = true; // audio is handled by a separate <audio> element; muting allows autoplay on Safari
             remoteMediaControls = isMobileDevice ? false : remoteMediaControls;
             remoteMedia.style.objectFit = 'var(--video-object-fit)';
             remoteMedia.style.name = peer_id + '_typeCam';
@@ -4804,6 +4807,8 @@ async function loadRemoteMediaStream(stream, peers, peer_id, kind) {
             videoMediaContainer.appendChild(remoteVideoWrap);
             // attachMediaStream is a part of the adapter.js library
             attachMediaStream(remoteMedia, stream);
+            // Explicitly play – required on mobile Safari where autoplay alone is not enough
+            remoteMedia.play().catch(() => {});
 
             // resize video elements
             adaptAspectRatio();
@@ -4997,6 +5002,7 @@ async function loadRemoteMediaStream(stream, peers, peer_id, kind) {
             remoteScreenMedia.setAttribute('id', peer_id + '___screen');
             remoteScreenMedia.setAttribute('playsinline', true);
             remoteScreenMedia.autoplay = true;
+            remoteScreenMedia.muted = true; // audio is handled by a separate <audio> element; muting allows autoplay on Safari
             remoteScreenMedia.controls = remoteMediaControls;
             remoteScreenMedia.style.objectFit = 'contain';
             remoteScreenMedia.style.name = peer_id + '_typeScreen';
@@ -5017,6 +5023,8 @@ async function loadRemoteMediaStream(stream, peers, peer_id, kind) {
 
             videoMediaContainer.appendChild(remoteScreenWrap);
             attachMediaStream(remoteScreenMedia, stream);
+            // Explicitly play – required on mobile Safari where autoplay alone is not enough
+            remoteScreenMedia.play().catch(() => {});
             adaptAspectRatio();
 
             // handle remote private messages
@@ -12852,6 +12860,8 @@ function setPeerVideoStatus(peer_id, status) {
             { element: peerVideoPlayer, display: true, mode: 'block' },
             { element: peerVideoAvatarImage, display: false },
         ]);
+        // Safari requires explicit play() when a video element becomes visible again
+        if (peerVideoPlayer) peerVideoPlayer.play().catch(() => {});
         if (peerVideoStatus) {
             setMediaButtonsClass([{ element: peerVideoStatus, status: true, mediaType: 'video' }]);
             setTippy(peerVideoStatus, 'Participant video is on', 'bottom');
@@ -15813,7 +15823,7 @@ function showAbout() {
     Swal.fire({
         background: swBg,
         position: 'center',
-        title: brand.about?.title && brand.about.title.trim() !== '' ? brand.about.title : 'WebRTC P2P v1.8.33',
+        title: brand.about?.title && brand.about.title.trim() !== '' ? brand.about.title : 'WebRTC P2P v1.8.34',
         imageUrl: brand.about?.imageUrl && brand.about.imageUrl.trim() !== '' ? brand.about.imageUrl : images.about,
         customClass: { image: 'img-about' },
         html: renderRoomTemplate('tpl-about-modal', {
