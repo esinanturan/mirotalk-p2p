@@ -15,7 +15,7 @@
  * @license For commercial use or closed source, contact us at license.mirotalk@gmail.com or purchase directly from CodeCanyon
  * @license CodeCanyon: https://codecanyon.net/item/mirotalk-p2p-webrtc-realtime-video-conferences/38376661
  * @author  Miroslav Pejic - miroslav.pejic.85@gmail.com
- * @version 1.8.32
+ * @version 1.8.33
  *
  */
 
@@ -517,6 +517,7 @@ const icon = getId('disconnectBannerIcon');
 const title = getId('disconnectBannerTitle');
 const msg = getId('disconnectBannerMsg');
 const spinner = getId('disconnectBannerSpinner');
+let disconnectBannerRafId = null;
 
 //....
 
@@ -15812,7 +15813,7 @@ function showAbout() {
     Swal.fire({
         background: swBg,
         position: 'center',
-        title: brand.about?.title && brand.about.title.trim() !== '' ? brand.about.title : 'WebRTC P2P v1.8.32',
+        title: brand.about?.title && brand.about.title.trim() !== '' ? brand.about.title : 'WebRTC P2P v1.8.33',
         imageUrl: brand.about?.imageUrl && brand.about.imageUrl.trim() !== '' ? brand.about.imageUrl : images.about,
         customClass: { image: 'img-about' },
         html: renderRoomTemplate('tpl-about-modal', {
@@ -16075,15 +16076,23 @@ function showDisconnectBanner() {
     title.textContent = 'Connection lost';
     msg.innerHTML = 'Reconnecting to signaling server\u2026';
     spinner.style.opacity = '1';
-    // Trigger transition
-    requestAnimationFrame(() => banner.classList.add('visible'));
+    if (disconnectBannerRafId) cancelAnimationFrame(disconnectBannerRafId);
+    disconnectBannerRafId = requestAnimationFrame(() => {
+        disconnectBannerRafId = null;
+        banner.classList.add('visible');
+    });
 }
 
 /**
  * Hide the disconnect banner (or briefly show a reconnected confirmation).
  */
 function hideDisconnectBanner() {
-    if (!banner || !banner.classList.contains('visible')) return;
+    if (!banner) return;
+    if (disconnectBannerRafId) {
+        cancelAnimationFrame(disconnectBannerRafId);
+        disconnectBannerRafId = null;
+    }
+    if (!banner.classList.contains('visible')) return;
     banner.classList.add('reconnected');
     icon.className = 'fa-solid fa-circle-check';
     title.textContent = 'Back online';
