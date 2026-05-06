@@ -624,6 +624,7 @@ let peerConnections = {}; // keep track of our peer connections, indexed by peer
 let chatDataChannels = {}; // keep track of our peer chat data channels
 let fileDataChannels = {}; // keep track of our peer file sharing data channels
 let allPeers = {}; // keep track of all peers in the room, indexed by peer_id == socket.io id
+let pendingIceCandidates = {}; // keep track of pending ICE candidates before the peer connection is ready, indexed by peer_id == socket.io id
 
 let lastStats = null;
 
@@ -3115,10 +3116,19 @@ function handleSessionDescription(config) {
 
     const pc = peerConnections[peer_id];
 
+    if (!pc) {
+        console.warn('[RTCSessionDescription] peer connection missing, ignoring', { peer_id });
+        return;
+    }
+
     // https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/setRemoteDescription
     pc.setRemoteDescription(remote_description)
         .then(() => {
             console.log('setRemoteDescription done!');
+
+            // Drain any queued ICE now that remoteDescription is set.
+            flushIceCandidates(peer_id).catch((err) => console.error('[Error] flushIceCandidates', err));
+
             if (session_description.type == 'offer') {
                 console.log('Creating answer');
                 // https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/createAnswer
@@ -3166,9 +3176,57 @@ function handleSessionDescription(config) {
 function handleIceCandidate(config) {
     const { peer_id, ice_candidate } = config;
     // https://developer.mozilla.org/en-US/docs/Web/API/RTCIceCandidate
-    peerConnections[peer_id].addIceCandidate(new RTCIceCandidate(ice_candidate)).catch((err) => {
+    const pc = peerConnections[peer_id];
+
+    if (!pc) {
+        queueIceCandidate(peer_id, ice_candidate);
+        return;
+    }
+
+    // Queue until remoteDescription is set; otherwise addIceCandidate can fail and the candidate is lost.
+    if (!pc.remoteDescription || !pc.remoteDescription.type) {
+        queueIceCandidate(peer_id, ice_candidate);
+        return;
+    }
+
+    pc.addIceCandidate(new RTCIceCandidate(ice_candidate)).catch((err) => {
         console.error('[Error] addIceCandidate', err);
     });
+}
+
+/**
+ * If addIceCandidate is called before setRemoteDescription, it can fail and the candidate will be lost. To prevent this, we queue candidates until setRemoteDescription is called.
+ * @param {string} peer_id socket.id
+ * @param {object} ice_candidate RTCIceCandidateInit
+ * @returns {void}
+ */
+function queueIceCandidate(peer_id, ice_candidate) {
+    if (!peer_id || !ice_candidate) return;
+    if (!pendingIceCandidates[peer_id]) pendingIceCandidates[peer_id] = [];
+    pendingIceCandidates[peer_id].push(ice_candidate);
+}
+
+/**
+ * When setRemoteDescription is called, we can flush any queued ICE candidates for that peer.
+ * @param {string} peer_id socket.id
+ * @returns {Promise<void>}
+ */
+async function flushIceCandidates(peer_id) {
+    const pc = peerConnections[peer_id];
+    const queued = pendingIceCandidates[peer_id];
+
+    if (!pc || !queued || queued.length === 0) return;
+    if (!pc.remoteDescription || !pc.remoteDescription.type) return;
+
+    delete pendingIceCandidates[peer_id];
+
+    for (const ice of queued) {
+        try {
+            await pc.addIceCandidate(new RTCIceCandidate(ice));
+        } catch (err) {
+            console.error('[Error] addIceCandidate (queued)', err);
+        }
+    }
 }
 
 /**
@@ -3229,6 +3287,7 @@ function handleDisconnect(reason) {
     chatDataChannels = {};
     fileDataChannels = {};
     peerConnections = {};
+    pendingIceCandidates = {};
     peerScreenMediaElements = {};
     peerVideoMediaElements = {};
     peerAudioMediaElements = {};
@@ -3302,6 +3361,7 @@ function handleRemovePeer(config) {
     delete chatDataChannels[peer_id];
     delete fileDataChannels[peer_id];
     delete peerConnections[peer_id];
+    delete pendingIceCandidates[peer_id];
     delete peerScreenMediaElements[peerScreenId];
     delete peerVideoMediaElements[peerVideoId];
     delete peerAudioMediaElements[peerAudioId];
